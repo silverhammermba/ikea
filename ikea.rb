@@ -2,6 +2,8 @@ require 'set'
 
 class Predictor
   def initialize source
+    @length_counts = Hash.new 0
+    @last_counts = Hash.new 0
     @digraph_counts = {}
 
     @sources = Set.new
@@ -11,6 +13,8 @@ class Predictor
         name = line.strip.upcase
         next if @sources.include? name
         @sources << name
+
+        @length_counts[name.length] += 1
 
         # first letter
         @digraph_counts["^^"] ||= Hash.new 0
@@ -26,46 +30,93 @@ class Predictor
           @digraph_counts[digraph][name[i + 2]] += 1
         end
 
-        last = name[-2..-1]
-        @digraph_counts[last] ||= Hash.new 0
-        @digraph_counts[last][nil] += 1
+        @last_counts[name[-2..-1]] += 1
       end
     end
 
-    @totals = @digraph_counts.map { |d, n| [d, n.values.reduce(:+)] }.to_h
+    # transform length_counts into a cumulative distribution
+    @max_length = @length_counts.keys.max
+    @max_length.downto(0).each do |i|
+      (0...i).each do |j|
+        @length_counts[i] += @length_counts[j]
+      end
+    end
+    @length_totals = @length_counts[@max_length]
 
-    p @sources.max_by { |x| x.length }
+    @digraph_totals = @digraph_counts.map { |d, n| [d, n.values.reduce(:+)] }.to_h
   end
 
-  # predict the next character to be added to the string
-  # or nil if the string is long enough
-  private def predict_next str
-    while str.length < 2
-      str = "^#{str}"
+  private def digraph str
+    case str.length
+    when 0
+      return "^^"
+    when 1
+      return "^#{str}"
+    else
+      return str[-2..-1]
     end
+  end
 
-    di = str[-2..-1]
+  # finish up predicting str, possibly adding one more char
+  def predict_end str
+    di = digraph str
 
     counts = @digraph_counts[di]
-    total = @totals[di]
 
-    # TODO try different counts if nil?
-    return nil unless counts
+    return str unless counts
 
-    r = rand(total)
-    t = 0
-    counts.each do |m, c|
-      t += c
-      return m if r < t
+    # collect all of the next letters that are used as endings
+    last_hash = Hash.new 0
+    counts.each do |k, v|
+      last = @last_counts[di[-1] + k]
+      if last > 0
+        last_hash[k] = last
+      end
     end
-    raise "failed to randomly select next character"
+
+    unless last_hash.empty?
+      total = last_hash.values.reduce(:+)
+      r = rand(total)
+      t = 0
+      last_hash.each do |m, c|
+        t += c
+        return str + m if r < t
+      end
+      raise "failed to select final character"
+    end
+
+    # no good endings, just cut it off
+    str
+  end
+
+  # should this string end (according to the source)?
+  def should_end? str
+    return true if str.length >= @max_length
+    return true unless @digraph_counts[digraph str]
+    return true if rand(@length_totals) < @length_counts[str.length + 1]
+
+    false
+  end
+
+  # add a character to str
+  def predict_next str
+    di = digraph str
+
+    r = rand @digraph_totals[di]
+    t = 0
+    @digraph_counts[di].each do |m, c|
+      t += c
+      return str + m if r < t
+    end
+
+    # failed to find a good character
+    str
   end
 
   # finish predicting str
   def predict str = ""
-    n = predict_next str.upcase
-    return str unless n
-    predict(str + n)
+    return predict_end(str) if should_end? str
+    predict(predict_next str)
   end
 
   def predict_new str = ""
@@ -78,12 +129,4 @@ end
 
 pr = Predictor.new ARGV[0]
 
-names = Set.new
-
-100.times do
-  name = pr.predict_new
-  next if names.include? name
-  names << name
-end
-
-names.each { |n| puts n }
+puts pr.predict(ARGV[1])
