@@ -129,4 +129,7 @@ end
 
 pr = Predictor.new ARGV[0]
 
+puts 50.times.map { pr.predict_new ARGV[1] }.uniq
+exit
+
 puts pr.predict(ARGV[1])
